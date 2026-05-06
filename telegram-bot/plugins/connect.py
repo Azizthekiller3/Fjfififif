@@ -136,18 +136,30 @@ async def connections(bot, message):
         )
 
     text = "ᴛʜɪꜱ ɢʀᴏᴜᴘ ɪꜱ ᴄᴏɴɴᴇᴄᴛᴇᴅ ᴡɪᴛʜ - \n\n"
+    from client import User
+
+    async def _resolve_chat(cid):
+        for client in (bot, User):
+            try:
+                return await client.get_chat(cid)
+            except Exception:
+                continue
+        return None
+
     for channel in channels:
-        try:
-            chat = await bot.get_chat(channel)
-            text += f"[{chat.title}]({chat.invite_link})\n"
-        except Exception as e:
-            await message.reply(f"🚫  ᴇʀʀᴏʀ  ɪɴ `{channel}:`\n`{e}`")
+        chat = await _resolve_chat(channel)
+        if chat:
+            link = chat.invite_link or f"https://t.me/c/{str(channel).replace('-100', '')}/1"
+            text += f"• [{chat.title}]({link})\n"
+        else:
+            text += f"• `{channel}` _(inaccessible)_\n"
 
     if f_sub:
-        try:
-            f_chat = await bot.get_chat(f_sub)
-            text += f"\nFSub: [{f_chat.title}]({f_chat.invite_link})"
-        except Exception as e:
-            await message.reply(f"❌ ᴇʀʀᴏʀ ɪɴ ꜰꜱᴜʙ (`{f_sub}`)\n`{e}`")
+        chat = await _resolve_chat(f_sub)
+        if chat:
+            link = chat.invite_link or f"https://t.me/c/{str(f_sub).replace('-100', '')}/1"
+            text += f"\nꜰꜱᴜʙ: [{chat.title}]({link})"
+        else:
+            text += f"\nꜰꜱᴜʙ: `{f_sub}` _(inaccessible)_"
 
     await message.reply(text=text, disable_web_page_preview=True)
