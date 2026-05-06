@@ -1,9 +1,13 @@
 import os
+import base64
+import struct
+import logging
+
+logger = logging.getLogger(__name__)
 
 API_ID    = int(os.environ.get("API_ID", 0))
 API_HASH  = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-SESSION   = os.environ.get("SESSION") or os.environ.get("SESSION_SECRET", "")
 OWNER_ID  = int(os.environ.get("OWNER_ID", 0))
 LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", 0))
 
@@ -25,3 +29,51 @@ SEARCH_REPLY_TTL = 15 * 60
 WELCOME_TTL      = 120
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", os.environ.get("PORT", 5000)))
 PORT        = HEALTH_PORT
+
+# Pyrogram new-format struct: >BI?256sQ?  = 271 bytes
+_PYRO_FORMAT = ">BI?256sQ?"
+_PYRO_SIZE   = struct.calcsize(_PYRO_FORMAT)   # 271
+
+# Old/custom format: dc_id(1B) + ip_len(2B) + ip(ip_len) + port(2B) + auth_key(256B)
+# Produced by some session generators (e.g. StringFather-style tools).
+# Total = 274 bytes for a typical IPv4 address of 13 chars.
+
+def _convert_custom_session(raw_b64: str) -> str:
+    """Convert a custom-format session string to the Pyrogram MemoryStorage format."""
+    try:
+        data = base64.urlsafe_b64decode(raw_b64 + "=" * (-len(raw_b64) % 4))
+        if len(data) == _PYRO_SIZE:
+            return raw_b64  # already correct format
+        dc_id  = data[0]
+        ip_len = struct.unpack(">H", data[1:3])[0]
+        offset = 3 + ip_len + 2        # skip ip + port
+        auth_key = data[offset:offset + 256]
+        if len(auth_key) != 256:
+            return raw_b64             # can't convert, return as-is
+        packed = struct.pack(
+            _PYRO_FORMAT,
+            dc_id,
+            API_ID,
+            False,      # test_mode
+            auth_key,
+            OWNER_ID,   # user_id
+            False,      # is_bot
+        )
+        converted = base64.urlsafe_b64encode(packed).decode().rstrip("=")
+        logger.info("Session converted from custom format → Pyrogram format (dc_id=%d)", dc_id)
+        return converted
+    except Exception as e:
+        logger.warning("Session conversion failed (%s) — using raw value", e)
+        return raw_b64
+
+
+def _normalise_session(s: str) -> str:
+    if not s:
+        return s
+    # Strip version prefix ("1") used by some external generators
+    raw = s[1:] if (s.startswith("1") and len(s) > 1) else s
+    return _convert_custom_session(raw)
+
+
+_raw_session = os.environ.get("SESSION") or os.environ.get("SESSION_SECRET", "")
+SESSION = _normalise_session(_raw_session)
