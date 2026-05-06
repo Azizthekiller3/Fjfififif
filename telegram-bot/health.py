@@ -97,9 +97,10 @@ _GEN_HTML = """<!DOCTYPE html>
     <div class="result" id="sess"></div>
     <button class="copy-btn" onclick="copy()">&#128203; Copy to Clipboard</button>
     <div class="note">
-      Add this as a Replit secret:<br>
-      <b>Key:</b> SESSION &nbsp;|&nbsp; <b>Value:</b> the string above<br><br>
-      Then restart the bot &#8212; search will be fully active.
+      Add this as an environment variable:<br>
+      <b>Key:</b> SESSION_SECRET &nbsp;|&nbsp; <b>Value:</b> the string above<br><br>
+      On Railway: service → Variables → New Variable.<br>
+      Then redeploy &#8212; search will be fully active.
     </div>
   </div>
 </div>
