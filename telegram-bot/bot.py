@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+import signal
 import sys
 from subprocess import Popen
 
@@ -108,9 +110,12 @@ async def _start_user_session():
         _USER_CONNECTED = True
         logger.info(f"✅ User session started as @{me.username or me.first_name}")
         try:
+            count = 0
             async for _ in User.get_dialogs():
-                pass
-            logger.info("✅ Peer cache warmed up")
+                count += 1
+                if count >= 200:
+                    break
+            logger.info(f"✅ Peer cache warmed up ({count} dialogs)")
         except Exception as warm_err:
             logger.warning(f"Peer cache warm-up partial: {warm_err}")
     except Exception as e:
@@ -140,9 +145,10 @@ async def _session_watchdog():
 
 def _start_autodelete_worker():
     try:
+        bot_dir = os.path.dirname(os.path.abspath(__file__))
         Popen(
             [sys.executable, "-m", "utils.delete"],
-            cwd=".",
+            cwd=bot_dir,
         )
         logger.info("✅ Auto-delete worker started")
     except Exception as e:
@@ -158,18 +164,28 @@ async def main():
 
     watchdog = asyncio.create_task(_session_watchdog())
 
-    logger.info("Bot is running. Press Ctrl+C to stop.")
-    try:
-        await asyncio.Event().wait()
-    except (KeyboardInterrupt, SystemExit):
-        pass
-    finally:
-        watchdog.cancel()
+    stop_event = asyncio.Event()
+
+    def _handle_signal():
+        logger.info("Shutdown signal received — stopping bot…")
+        stop_event.set()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
         try:
-            await watchdog
-        except asyncio.CancelledError:
+            loop.add_signal_handler(sig, _handle_signal)
+        except NotImplementedError:
             pass
-        await bot.stop()
+
+    logger.info("Bot is running. Send SIGTERM or Ctrl+C to stop.")
+    await stop_event.wait()
+
+    watchdog.cancel()
+    try:
+        await watchdog
+    except asyncio.CancelledError:
+        pass
+    await bot.stop()
 
 
 if __name__ == "__main__":
