@@ -1,10 +1,2 @@
-import logging
-from pyrogram import Client
-from pyrogram.handlers import MessageHandler
-
-logger = logging.getLogger(__name__)
-
-
-@Client.on_message()
-async def catch_all(bot, message):
-    pass
+# No catch-all handler — Pyrogram's dispatcher breaks after first match per group,
+# so a bare @Client.on_message() here would silently swallow every message.
