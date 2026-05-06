@@ -53,6 +53,7 @@ class Bot(Client):
             BotCommand("connections",  "Get connected channels list"),
             BotCommand("autodelete",   "Set auto-delete timer"),
             BotCommand("help",         "Show all commands"),
+            BotCommand("ping",         "Check bot speed and latency"),
         ])
         logger.info("✅ Bot commands registered")
 
