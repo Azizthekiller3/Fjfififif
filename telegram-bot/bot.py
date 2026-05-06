@@ -17,16 +17,34 @@ logger = logging.getLogger(__name__)
 _USER_CONNECTED = False
 
 
+def _session_name():
+    """Use a file session when a writable sessions dir exists, else in-memory."""
+    import os
+    sessions_dir = os.environ.get("SESSIONS_DIR", "sessions")
+    try:
+        os.makedirs(sessions_dir, exist_ok=True)
+        test = os.path.join(sessions_dir, ".write_test")
+        open(test, "w").close()
+        os.remove(test)
+        return os.path.join(sessions_dir, "bot")
+    except Exception:
+        return ":memory:"
+
+
 class Bot(Client):
     def __init__(self):
-        super().__init__(
-            name="sessions/bot",
+        name = _session_name()
+        kwargs = dict(
             api_id=API_ID,
             api_hash=API_HASH,
             bot_token=BOT_TOKEN,
             plugins={"root": "plugins"},
             sleep_threshold=60,
         )
+        if name == ":memory:":
+            kwargs["in_memory"] = True
+            name = "bot"
+        super().__init__(name=name, **kwargs)
 
     async def start(self):
         await super().start()
