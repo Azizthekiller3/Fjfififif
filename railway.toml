@@ -1,0 +1,6 @@
+[build]
+dockerfilePath = "telegram-bot/Dockerfile"
+
+[deploy]
+startCommand = "python bot.py"
+restartPolicyType = "always"
