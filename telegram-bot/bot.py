@@ -20,13 +20,12 @@ _USER_CONNECTED = False
 class Bot(Client):
     def __init__(self):
         super().__init__(
-            name="bot",
+            name="sessions/bot",
             api_id=API_ID,
             api_hash=API_HASH,
             bot_token=BOT_TOKEN,
             plugins={"root": "plugins"},
             sleep_threshold=60,
-            in_memory=True,
         )
 
     async def start(self):
