@@ -1,5 +1,6 @@
 [build]
-dockerfilePath = "Dockerfile"
+dockerfilePath = "telegram-bot/Dockerfile"
+buildContextDir = "telegram-bot"
 
 [deploy]
 restartPolicyType = "always"
