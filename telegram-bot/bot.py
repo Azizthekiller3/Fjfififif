@@ -73,6 +73,7 @@ class Bot(Client):
             BotCommand("autodelete",   "Set auto-delete timer"),
             BotCommand("help",         "Show all commands"),
             BotCommand("ping",         "Check bot speed and latency"),
+            BotCommand("logs",         "View bot status & logs (owner only)"),
         ])
         logger.info("✅ Bot commands registered")
 
