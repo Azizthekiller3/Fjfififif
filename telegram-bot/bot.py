@@ -1,4 +1,4 @@
-import patches  # noqa: F401 — must be first: patches Pyrogram dispatcher
+import patches  # noqa: F401 — must be first
 
 import asyncio
 import logging
@@ -18,41 +18,26 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _USER_CONNECTED = False
-_BOT_RESTART_DELAY = 10   # seconds between crash-restarts
-_KEEPALIVE_INTERVAL = 240 # ping Telegram every 4 minutes to keep MTProto alive
-
-
-def _session_name():
-    sessions_dir = os.environ.get("SESSIONS_DIR", "sessions")
-    try:
-        os.makedirs(sessions_dir, exist_ok=True)
-        test = os.path.join(sessions_dir, ".write_test")
-        open(test, "w").close()
-        os.remove(test)
-        return os.path.join(sessions_dir, "bot")
-    except Exception:
-        return ":memory:"
+_KEEPALIVE_INTERVAL = 240  # 4 minutes — shorter than Railway's ~5 min idle TCP timeout
 
 
 class Bot(Client):
     def __init__(self):
-        name = _session_name()
-        kwargs = dict(
+        super().__init__(
+            name="bot",
             api_id=API_ID,
             api_hash=API_HASH,
             bot_token=BOT_TOKEN,
             plugins={"root": "plugins"},
             sleep_threshold=60,
+            in_memory=True,
         )
-        if name == ":memory:":
-            kwargs["in_memory"] = True
-            name = "bot"
-        super().__init__(name=name, **kwargs)
 
     async def start(self):
         await super().start()
         await create_indexes()
 
+        global _USER_CONNECTED
         if SESSION:
             await _start_user_session()
         else:
@@ -122,30 +107,6 @@ async def _start_user_session():
         logger.warning(f"⚠️ User session failed: {e}")
 
 
-async def _bot_keepalive(bot: "Bot"):
-    """
-    Ping Telegram every 4 minutes to prevent the MTProto TCP connection
-    from being silently dropped by Railway's network (idle timeout ~5 min).
-    If the ping fails, attempt a reconnect.
-    """
-    consecutive_failures = 0
-    while True:
-        await asyncio.sleep(_KEEPALIVE_INTERVAL)
-        try:
-            await bot.get_me()
-            consecutive_failures = 0
-            logger.debug("Keepalive ping OK")
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            consecutive_failures += 1
-            logger.warning(f"Keepalive ping failed ({consecutive_failures}x): {e}")
-            if consecutive_failures >= 3:
-                logger.error("Bot appears disconnected — triggering restart")
-                # Raise so the supervisor (main) restarts the whole bot
-                raise RuntimeError(f"Bot keepalive failed 3 times: {e}")
-
-
 async def _session_watchdog():
     """Reconnect the user (search) session if it drops."""
     while True:
@@ -162,17 +123,40 @@ async def _session_watchdog():
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.warning(f"Session watchdog error: {e} — attempting reconnect")
+            logger.warning(f"Session watchdog error: {e}")
             try:
                 await _start_user_session()
             except Exception:
                 pass
 
 
-async def _autodelete_loop(bot: "Bot"):
+async def _bot_keepalive(bot: Client):
+    """
+    Ping Telegram every 4 minutes so Railway's TCP idle timeout never closes
+    the MTProto connection.  After 3 consecutive failures the task raises so
+    the bot process exits and Railway restarts it.
+    """
+    failures = 0
+    while True:
+        await asyncio.sleep(_KEEPALIVE_INTERVAL)
+        try:
+            await bot.get_me()
+            failures = 0
+            logger.debug("Keepalive OK")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            failures += 1
+            logger.warning(f"Keepalive failed ({failures}/3): {e}")
+            if failures >= 3:
+                logger.error("Bot connection lost — exiting so Railway can restart")
+                os._exit(1)   # force Railway to do a clean restart
+
+
+async def _autodelete_loop(bot: Client):
     """
     Delete expired messages using the MAIN bot instance.
-    Runs as an asyncio task — no subprocess, no second bot token connection.
+    No subprocess, no second BOT_TOKEN session — avoids the update-stealing bug.
     """
     from time import time as _time
     from database import get_all_dlt_data, delete_all_dlt_data
@@ -202,21 +186,22 @@ async def _autodelete_loop(bot: "Bot"):
         await asyncio.sleep(5)
 
 
-async def _run_bot():
-    """Start the bot and run until a stop signal or fatal error."""
+async def main():
+    from health import start_health_server
+    start_health_server()
+
     bot = Bot()
     await bot.start()
 
-    tasks = [
-        asyncio.create_task(_bot_keepalive(bot),    name="keepalive"),
-        asyncio.create_task(_session_watchdog(),     name="watchdog"),
-        asyncio.create_task(_autodelete_loop(bot),   name="autodelete"),
-    ]
+    # Background tasks — same pattern as original watchdog
+    watchdog  = asyncio.create_task(_session_watchdog())
+    keepalive = asyncio.create_task(_bot_keepalive(bot))
+    autodelete = asyncio.create_task(_autodelete_loop(bot))
 
     stop_event = asyncio.Event()
 
     def _handle_signal():
-        logger.info("Shutdown signal received — stopping bot…")
+        logger.info("Shutdown signal — stopping…")
         stop_event.set()
 
     loop = asyncio.get_running_loop()
@@ -226,55 +211,16 @@ async def _run_bot():
         except NotImplementedError:
             pass
 
-    logger.info("Bot is running. Send SIGTERM or Ctrl+C to stop.")
+    logger.info("Bot is running. SIGTERM or Ctrl+C to stop.")
+    await stop_event.wait()
 
-    # Wait until stop signal OR any background task crashes
-    done, pending = await asyncio.wait(
-        [asyncio.create_task(stop_event.wait()), *tasks],
-        return_when=asyncio.FIRST_COMPLETED,
-    )
-
-    # Cancel remaining tasks
-    for task in pending:
+    for task in (autodelete, keepalive, watchdog):
         task.cancel()
-    for task in pending:
         try:
             await task
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
             pass
-
-    # Check if a task crashed (vs clean shutdown)
-    for task in done:
-        if not task.cancelled() and task.exception():
-            exc = task.exception()
-            logger.error(f"Task '{task.get_name()}' crashed: {exc}")
-            await bot.stop()
-            raise exc  # propagate to supervisor
-
     await bot.stop()
-
-
-async def main():
-    from health import start_health_server
-    start_health_server()
-
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            logger.info(f"🚀 Starting bot (attempt #{attempt})")
-            await _run_bot()
-            logger.info("Bot exited cleanly.")
-            break  # clean exit (SIGTERM/SIGINT) — don't restart
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            logger.info("Bot stopped by user.")
-            break
-        except Exception as e:
-            logger.error(
-                f"Bot crashed: {e} — restarting in {_BOT_RESTART_DELAY}s "
-                f"(attempt #{attempt})"
-            )
-            await asyncio.sleep(_BOT_RESTART_DELAY)
 
 
 if __name__ == "__main__":
