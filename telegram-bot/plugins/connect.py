@@ -1,13 +1,33 @@
 from config import LOG_CHANNEL
 from utils import get_group, update_group
-from client import User
 from pyrogram import Client, filters
+
+
+def _get_user():
+    """
+    Lazily import and return the User client.
+    Returns (User, error_text) — if the session is not connected,
+    User is None and error_text explains why.
+    """
+    try:
+        from client import User
+        if not User.is_connected:
+            return None, "⚠️ User session is not connected. Try again in a moment or contact the owner."
+        return User, None
+    except Exception as e:
+        return None, f"⚠️ User session unavailable: {e}"
 
 
 @Client.on_message(filters.group & filters.command("connect"))
 async def connect(bot, message):
     m = await message.reply("<b>ᴄᴏɴɴᴇᴄᴛɪɴɢ...</b>")
+
+    User, err = _get_user()
+    if err:
+        return await m.edit(err)
+
     user_acc = await User.get_me()
+
     try:
         group     = await get_group(message.chat.id)
         user_id   = group["user_id"]
@@ -31,10 +51,10 @@ async def connect(bot, message):
         return await m.edit("ɪɴᴄᴏʀʀᴇᴄᴛ ꜰᴏʀᴍᴀᴛ 🚫\nᴜꜱᴇ `/connect` ᴄʜᴀɴɴᴇʟ ɪᴅ")
 
     try:
-        chat  = await bot.get_chat(channel)
+        chat       = await bot.get_chat(channel)
         group_chat = await bot.get_chat(message.chat.id)
-        c_link = chat.invite_link
-        g_link = group_chat.invite_link
+        c_link     = chat.invite_link
+        g_link     = group_chat.invite_link
         try:
             await User.join_chat(c_link)
         except Exception as e:
@@ -52,7 +72,7 @@ async def connect(bot, message):
     await update_group(message.chat.id, {"channels": channels})
     await m.edit(
         f"ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ ᴄᴏɴɴᴇᴄᴛᴇᴅ ᴛᴏ\n[{chat.title}]({c_link})",
-        disable_web_page_preview=True
+        disable_web_page_preview=True,
     )
     text = (
         f"#NewConnection\n\n"
@@ -67,6 +87,11 @@ async def connect(bot, message):
 @Client.on_message(filters.group & filters.command("disconnect"))
 async def disconnect(bot, message):
     m = await message.reply("<b>ᴘʟᴇᴀꜱᴇ  ᴡᴀɪᴛ...</b>")
+
+    User, err = _get_user()
+    if err:
+        return await m.edit(err)
+
     try:
         group     = await get_group(message.chat.id)
         user_id   = group["user_id"]
@@ -90,10 +115,10 @@ async def disconnect(bot, message):
         return await m.edit("ɪɴᴄᴏʀʀᴇᴄᴛ ꜰᴏʀᴍᴀᴛ 🚫\nᴜꜱᴇ `/disconnect` ᴄʜᴀɴɴᴇʟ ɪᴅ")
 
     try:
-        chat  = await bot.get_chat(channel)
+        chat       = await bot.get_chat(channel)
         group_chat = await bot.get_chat(message.chat.id)
-        c_link = chat.invite_link
-        g_link = group_chat.invite_link
+        c_link     = chat.invite_link
+        g_link     = group_chat.invite_link
         await User.leave_chat(channel)
     except Exception as e:
         text = (
@@ -105,7 +130,7 @@ async def disconnect(bot, message):
     await update_group(message.chat.id, {"channels": channels})
     await m.edit(
         f"ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ ᴅɪꜱᴄᴏɴɴᴇᴄᴛᴇᴅ ꜰʀᴏᴍ [{chat.title}]({c_link})",
-        disable_web_page_preview=True
+        disable_web_page_preview=True,
     )
     text = (
         f"#DisConnection\n\n"
@@ -122,6 +147,7 @@ async def connections(bot, message):
     group = await get_group(message.chat.id)
     if not group:
         return await message.reply("ᴛʜɪꜱ ɢʀᴏᴜᴘ ɪꜱ ɴᴏᴛ ʀᴇɢɪꜱᴛᴇʀᴇᴅ ʏᴇᴛ.\nᴜꜱᴇ /verify")
+
     user_id   = group["user_id"]
     user_name = group["user_name"]
     channels  = group["channels"]
@@ -135,16 +161,19 @@ async def connections(bot, message):
             "ᴄᴏɴɴᴇᴄᴛ ᴏɴᴇ ᴜꜱɪɴɢ /connect"
         )
 
-    text = "ᴛʜɪꜱ ɢʀᴏᴜᴘ ɪꜱ ᴄᴏɴɴᴇᴄᴛᴇᴅ ᴡɪᴛʜ - \n\n"
-    from client import User
+    # Lazy-import User for resolving channel titles — fall back to bot-only if unavailable
+    User, _ = _get_user()
 
     async def _resolve_chat(cid):
-        for client in (bot, User):
+        clients = [bot] + ([User] if User else [])
+        for client in clients:
             try:
                 return await client.get_chat(cid)
             except Exception:
                 continue
         return None
+
+    text = "ᴛʜɪꜱ ɢʀᴏᴜᴘ ɪꜱ ᴄᴏɴɴᴇᴄᴛᴇᴅ ᴡɪᴛʜ - \n\n"
 
     for channel in channels:
         chat = await _resolve_chat(channel)
