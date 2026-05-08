@@ -32,9 +32,9 @@ def _uptime_str() -> str:
 
 async def _mongo_status() -> str:
     try:
-        from database.database import _get_cols, _client
-        _get_cols()
-        await _client.admin.command("ping")
+        import database.database as _db_mod
+        _db_mod._get_cols()  # ensures _client is initialised
+        await _db_mod._client.admin.command("ping")
         return "✅ Connected"
     except Exception as e:
         return f"❌ {e}"
