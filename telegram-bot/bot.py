@@ -1,3 +1,5 @@
+import patches  # noqa: F401 — must be first: patches Pyrogram dispatcher
+
 import asyncio
 import logging
 import os
