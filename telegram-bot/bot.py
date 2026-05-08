@@ -5,7 +5,6 @@ import logging
 import os
 import signal
 import sys
-from subprocess import Popen
 
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN, SESSION, LOG_CHANNEL, OWNER_ID
@@ -23,7 +22,6 @@ _USER_CONNECTED = False
 
 def _session_name():
     """Use a file session when a writable sessions dir exists, else in-memory."""
-    import os
     sessions_dir = os.environ.get("SESSIONS_DIR", "sessions")
     try:
         os.makedirs(sessions_dir, exist_ok=True)
@@ -59,8 +57,6 @@ class Bot(Client):
             await _start_user_session()
         else:
             logger.warning("⚠️ No SESSION set — search will be limited.")
-
-        _start_autodelete_worker()
 
         from pyrogram.types import BotCommand
         await self.set_bot_commands([
@@ -146,16 +142,37 @@ async def _session_watchdog():
                 pass
 
 
-def _start_autodelete_worker():
-    try:
-        bot_dir = os.path.dirname(os.path.abspath(__file__))
-        Popen(
-            [sys.executable, "-m", "utils.delete"],
-            cwd=bot_dir,
-        )
-        logger.info("✅ Auto-delete worker started")
-    except Exception as e:
-        logger.warning(f"Auto-delete worker failed to start: {e}")
+async def _autodelete_loop(bot):
+    """
+    Auto-delete expired messages using the MAIN bot instance.
+    Runs as an asyncio task — no subprocess, no second bot token connection.
+    """
+    from time import time as _time
+    from database import get_all_dlt_data, delete_all_dlt_data
+    from pyrogram.errors import FloodWait
+
+    logger.info("✅ Auto-delete task started (in-process)")
+    while True:
+        try:
+            now = int(_time())
+            records = await get_all_dlt_data(now)
+            for data in records:
+                try:
+                    await bot.delete_messages(
+                        chat_id=data["chat_id"],
+                        message_ids=data["message_id"],
+                    )
+                except FloodWait as e:
+                    await asyncio.sleep(e.value)
+                except Exception as e:
+                    logger.debug(f"Auto-delete skip: {data} — {e}")
+            if records:
+                await delete_all_dlt_data(now)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"Auto-delete loop error: {e}")
+        await asyncio.sleep(5)
 
 
 async def main():
@@ -166,6 +183,7 @@ async def main():
     await bot.start()
 
     watchdog = asyncio.create_task(_session_watchdog())
+    autodelete = asyncio.create_task(_autodelete_loop(bot))
 
     stop_event = asyncio.Event()
 
@@ -183,11 +201,13 @@ async def main():
     logger.info("Bot is running. Send SIGTERM or Ctrl+C to stop.")
     await stop_event.wait()
 
+    autodelete.cancel()
     watchdog.cancel()
-    try:
-        await watchdog
-    except asyncio.CancelledError:
-        pass
+    for task in (autodelete, watchdog):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await bot.stop()
 
 
